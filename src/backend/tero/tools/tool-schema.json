@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Tool Common Definitions",
+  "$id": "http://example.com/schemas/agent-tool-schema.json",
+  "$defs": {
+    "File": {
+      "type": "integer",
+      "description": "A file identifier"
+    }
+  }
+}

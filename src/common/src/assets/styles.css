@@ -1,0 +1,257 @@
+@import 'tailwindcss';
+@import 'tailwindcss-primeui';
+
+@font-face {
+  font-family: 'Sora';
+  font-display: swap;
+  src: url('./fonts/variable/Sora-Variable.ttf') format('truetype-variations');
+  font-weight: 100 800;
+}
+
+@theme {
+  --color-primary: #754bde;
+  --color-primary-pastel: #b8a7e9;
+  --color-dark-gray: #1f1f1f;
+  --color-pale: #f4f4f4;
+  --color-abstracta: #3c1464;
+  --color-abstracta-lighter: #d3c0ff;
+  --color-abstracta-lighter-pastel: #e9e0ff;
+  --color-auxiliar-gray: #d9d9d9;
+  --color-light-gray: #737475;
+  --color-lighter-gray: #ACACAC;
+  --color-warn: #F9BC46;
+  --color-warn-lighter: #FDEBC7;
+  --color-success: #2E7D32;
+  --color-success-lighter: #C8E6C9;
+  --color-error: #C62828;
+  --color-error-alt: #E94E84;
+  --color-error-alt-dark: #D14676;
+  --color-error-lighter: #FFCDD2;
+  --color-info: #5ACDFF;
+  --color-info-pastel: #a7e6ff;
+  --animate-wiggle: wiggle 1s ease-in-out infinite;
+  --animate-glowing: glowing 1s ease-in-out infinite;
+  --animate-magnify-search: magnify-search 1s ease-in-out infinite;
+  --shadow-light: 0px 2px 5px 0px rgba(0,0,0,0.07);
+  --border: 1px solid #ccc;
+}
+
+html:root,
+:root {
+  --p-tabs-tab-color: var(--color-dark-gray);
+  --p-text-color: var(--color-dark-gray);
+  --p-text-hover-color: var(--color-dark-gray);
+  --p-text-muted-color: var(--color-light-gray);
+  --p-text-hover-muted-color: var(--color-light-gray);
+  --p-primary-color: var(--color-dark-gray);
+  --p-form-field-color: var(--color-dark-gray);
+  --p-highlight-color: var(--color-dark-gray);
+  --p-highlight-focus-color: var(--color-dark-gray);
+}
+
+@keyframes wiggle {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes glowing {
+  0% {
+    box-shadow: 0 0 5px var(--color-primary-pastel), 0 0 10px var(--color-info-pastel), 0 0 15px var(--color-abstracta-lighter-pastel);
+  }
+  50% {
+    box-shadow: 0 0 10px var(--color-info-pastel), 0 0 15px var(--color-abstracta-lighter-pastel), 0 0 15px var(--color-primary-pastel);
+  }
+  100% {
+    box-shadow: 0 0 5px var(--color-primary-pastel), 0 0 10px var(--color-primary-pastel), 0 0 15px var(--color-abstracta-lighter-pastel);
+  }
+}
+
+@keyframes magnify-search {
+  0% {
+    transform: translate(0px, -6px);
+  }
+  25% {
+    transform: translate(6px, 0px);
+  }
+  50% {
+    transform: translate(0px, 6px);
+  }
+  75% {
+    transform: translate(-6px, 0px);
+  }
+  100% {
+    transform: translate(0px, -6px);
+  }
+}
+
+@keyframes border-pulse {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  70% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+/* Re-add button cursor pointer to override TailwindCSS default */
+@layer base {
+  html {
+    font-family: 'Sora';
+  }
+  button,
+  [role='button'] {
+    cursor: pointer;
+  }
+  button:disabled,
+  [role='button']:disabled {
+    cursor: default;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-auxiliar-gray);
+  border-radius: 8px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-auxiliar-gray) transparent;
+}
+
+html,
+body {
+  font-family: 'Sora';
+  font-weight: 400;
+}
+
+h1 {
+  @apply text-2xl font-semibold;
+}
+
+h2 {
+  @apply text-2xl;
+}
+
+h3 {
+  @apply text-lg font-medium;
+}
+
+h4 {
+  @apply text-base font-medium;
+}
+
+a {
+  @apply underline font-semibold cursor-pointer hover:text-primary flex items-center;
+}
+
+.bold-span {
+  @apply font-medium text-dark-gray;
+}
+
+.shadow-sm {
+  box-shadow: 0px 10px 20px 0px #5c73a012;
+}
+
+.p-tooltip .p-tooltip-arrow {
+  display: none;
+}
+
+.p-tooltip .p-tooltip-text {
+  @apply !bg-white !text-abstracta !border !text-xs !p-1;
+}
+
+.p-inputtext.borderless-input {
+  @apply !border-none !outline-none focus:!border-none focus:!outline-none 
+         focus-visible:!border-none focus-visible:!outline-none focus-within:!border-none;
+}
+
+.p-textarea.borderless-textarea {
+  @apply !w-full !border-none !shadow-none;
+}
+
+.p-textarea::placeholder {
+  @apply !text-lighter-gray;
+}
+
+.p-inputtext:focus,
+.p-inputtext:focus-visible,
+.p-textarea:focus,
+.p-textarea:focus-visible {
+  @apply border !border-abstracta;
+}
+
+.p-textarea-resizable {
+  @apply !overflow-y-auto;
+}
+
+.p-inputtext.borderless-input:focus,
+.p-inputtext.borderless-input:focus-visible,
+.p-inputtext.borderless-input:not(:focus) {
+  @apply !outline-none !border-none !ring-0 !shadow-none;
+}
+
+.p-inputtext::placeholder {
+  @apply !text-light-gray;
+}
+
+.p-menu {
+  @apply !rounded-xl !shadow-lg !border-auxiliar-gray !p-1;
+}
+
+.p-menu-item-content {
+  @apply hover:!bg-pale !rounded-lg;
+}
+
+.p-menu-item-content:not(:focus) {
+  @apply !bg-transparent hover:!bg-pale;
+}
+
+.form-field {
+  @apply flex flex-col;
+}
+
+.form-field label {
+  @apply text-base font-medium;
+}
+
+.form-field input,
+.form-field textarea {
+  @apply text-sm !border-(--color-auxiliar-gray) rounded-xl;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  @apply !border-(--color-abstracta);
+}
+
+.p-dialog-title {
+  @apply !font-medium;
+}
+
+.basic-dialog {
+  @apply !bg-transparent !border-none !min-w-[540px];
+}
+
+.basic-dialog .p-dialog-header {
+  @apply hidden;
+}
+
+.basic-dialog .p-dialog-content {
+  @apply p-0;
+}

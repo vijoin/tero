@@ -1,0 +1,22 @@
+{
+  "name": "browser-copilot",
+  "description": "Use AI agents at your fingertips while working on your favorite web applications",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare",
+    "publish-dev": "wxt submit --chrome-zip dist/*.zip --chrome-publish-target trustedTesters",
+    "publish": "wxt submit --chrome-zip dist/*.zip"
+  },
+  "dependencies": {
+    "@tero/common": "workspace:*"
+  },
+  "devDependencies": {
+    "wxt": "^0.20.6"
+  }
+}

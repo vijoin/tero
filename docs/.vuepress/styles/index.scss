@@ -1,0 +1,50 @@
+@import '@tabler/icons-webfont/dist/tabler-icons.min.css';
+
+:root {
+  --vp-c-accent: #754BDE;
+  --vp-c-accent-bg: #754BDE;
+  --vp-c-accent-hover: #3c1464;
+  --vp-c-accent-text: var(--vp-c-white);
+  --vp-c-accent-soft: rgb(16 185 129 / 14%);
+
+  --vp-c-text: #1F1F1F;
+  --vp-c-text-mute: #737475;
+  --vp-c-text-subtle: #ACACAC;
+
+}
+
+[data-theme='dark'] {
+  --vp-c-accent: #5ACDFF;
+  --vp-c-accent-bg: #5ACDFF;
+  --vp-c-accent-hover: #a7e6ff;
+  --vp-c-accent-soft: rgb(16 185 129 / 16%);
+
+  --vp-c-text: rgb(235 235 245 / 86%);
+  --vp-c-text-mute: rgb(235 235 245 / 60%);
+  --vp-c-text-subtle: rgb(235 235 245 / 38%);
+}
+
+.vp-navbar-item a[href*="discord.gg"]::before,
+.vp-navbar-item a[href*="github.com"]::before {
+  font-family: 'tabler-icons';
+  font-size: 24px;
+  color: var(--vp-c-text);
+  vertical-align: middle;
+}
+
+.vp-navbar-item a[href*="discord.gg"]::before {
+  content: "\f7e4";
+}
+  
+.vp-navbar-item a[href*="github.com"]::before {
+  content: "\f7e7";
+}
+
+.vp-navbar .search-box input {
+    border: 1px solid var(--vp-c-border);
+    border-radius: 20px;
+}
+
+.vp-navbar .search-box:focus input {
+    border-color: var(--vp-c-accent);
+}

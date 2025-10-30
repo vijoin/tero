@@ -1,0 +1,398 @@
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+import logging
+import secrets
+import time
+from typing import Any, Optional, cast
+from urllib.parse import urlencode, urljoin
+
+from fastapi import HTTPException, status
+import httpx
+from mcp.client.auth import OAuthClientProvider, TokenStorage, PKCEParameters, OAuthFlowError, OAuthRegistrationError
+from mcp.shared.auth import OAuthClientMetadata, OAuthToken, OAuthClientInformationFull, OAuthMetadata
+from pydantic import AnyHttpUrl, BaseModel, ValidationError
+from sqlmodel import SQLModel, Field, col, select, delete, and_
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from ..core.env import env
+from ..core.repos import scalar, EncryptedField
+
+logger = logging.getLogger(__name__)
+
+class ToolOAuthTokenType(str, Enum):
+    BEARER = "bearer"
+
+
+class ToolOAuthToken(SQLModel, table=True):
+    __tablename__ : Any = "tool_oauth_token"
+    user_id: int = Field(primary_key=True)
+    agent_id: int = Field(primary_key=True)
+    tool_id: str = Field(primary_key=True)
+    access_token: str = EncryptedField()
+    token_type: ToolOAuthTokenType = ToolOAuthTokenType.BEARER
+    expires_in: Optional[int] = Field(exclude=True, default=None)
+    scope: Optional[str] = None
+    refresh_token: Optional[str] = EncryptedField(nullable=True, default=None)
+    expires_at: Optional[float] = None
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ToolOAuthState(SQLModel, table=True):
+    __tablename__ : Any = "tool_oauth_state"
+    user_id: int = Field(primary_key=True)
+    agent_id: int = Field(index=True)
+    tool_id: str = Field(primary_key=True)
+    state: str = Field(primary_key=True)
+    code_verifier: str = EncryptedField()
+    token_endpoint: Optional[str]
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ToolOAuthClientInfo(SQLModel, table=True):
+    __tablename__ : Any = "tool_oauth_client_info"
+    user_id: int = Field(primary_key=True)
+    agent_id: int = Field(primary_key=True)
+    tool_id: str = Field(primary_key=True)
+    client_id: str
+    client_secret: str = EncryptedField()
+    scope: Optional[str] = None
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ToolOAuthRequest(BaseException):
+    
+    def __init__(self, auth_url: str, state: str):
+        self.auth_url = auth_url
+        self.state = state
+
+
+def build_tool_oauth_request_http_exception(e: ToolOAuthRequest) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={ "oauthUrl" : e.auth_url, "oauthState" : e.state })
+
+
+class ToolAuthCallback(BaseModel):
+    state: str
+    code: Optional[str] = None
+
+
+class ToolOAuthCallbackError(BaseException):
+    pass
+
+
+class ToolOAuthRepository:
+
+    def __init__(self, db: AsyncSession):
+        self._db = db
+
+    async def find_token(self, user_id: int, agent_id: int, tool_id: str) -> Optional[ToolOAuthToken]:
+        stmt = (select(ToolOAuthToken).
+            where(ToolOAuthToken.user_id == user_id, ToolOAuthToken.agent_id == agent_id, ToolOAuthToken.tool_id == tool_id))
+        result = await self._db.exec(stmt)
+        return result.one_or_none()
+
+    async def save_token(self, token: ToolOAuthToken):
+        token.updated_at = datetime.now(timezone.utc)
+        await self._db.merge(token)
+        await self._db.commit()
+
+    async def delete_token(self, user_id: int, agent_id: int, tool_id: str):
+        stmt = scalar(delete(ToolOAuthToken).
+            where(and_(ToolOAuthToken.user_id == user_id, ToolOAuthToken.agent_id == agent_id, ToolOAuthToken.tool_id == tool_id)))
+        await self._db.exec(stmt)
+        await self._db.commit()
+        await self.delete_state(user_id, agent_id, tool_id)
+
+    async def find_state(self, user_id: int, tool_id: str, state: str) -> Optional[ToolOAuthState]:
+        stmt = (select(ToolOAuthState).
+            where(ToolOAuthState.user_id == user_id, ToolOAuthState.tool_id == tool_id, ToolOAuthState.state == state))
+        ret = await self._db.exec(stmt)
+        return ret.one_or_none()
+    
+    async def save_state(self, state: ToolOAuthState):
+        state.updated_at = datetime.now(timezone.utc)
+        await self._db.merge(state)
+        await self._db.commit()
+
+    async def delete_state(self, user_id: int, agent_id: int, tool_id: str):
+        stmt = scalar(delete(ToolOAuthState).
+            where(and_(ToolOAuthState.user_id == user_id, ToolOAuthState.tool_id == tool_id, ToolOAuthState.agent_id == agent_id)))
+        await self._db.exec(stmt)
+        await self._db.commit()
+
+    async def cleanup(self):
+        token_cutoff = datetime.now(timezone.utc) - timedelta(minutes=env.tool_oauth_token_ttl_minutes)
+        token_stmt = scalar(delete(ToolOAuthToken).where(and_(ToolOAuthToken.updated_at < token_cutoff)))
+        await self._db.exec(token_stmt)
+        
+        state_cutoff = datetime.now(timezone.utc) - timedelta(minutes=env.tool_oauth_state_ttl_minutes)
+        state_stmt = scalar(delete(ToolOAuthState).where(and_(ToolOAuthState.updated_at < state_cutoff)))
+        await self._db.exec(state_stmt)
+        
+        await self._db.commit()
+
+
+class ToolOAuthClientInfoRepository:
+    def __init__(self, db: AsyncSession):
+        self._db = db
+    
+    async def save(self, info: ToolOAuthClientInfo):
+        await self._db.merge(info)
+        await self._db.commit()
+
+    async def find_by_ids(self, user_id: int, agent_id: int, tool_id: str) -> Optional[ToolOAuthClientInfo]:
+        stmt = (select(ToolOAuthClientInfo).
+            where(ToolOAuthClientInfo.user_id == user_id, ToolOAuthClientInfo.agent_id == agent_id, ToolOAuthClientInfo.tool_id == tool_id))
+        result = await self._db.exec(stmt)
+        return result.one_or_none()
+    
+    async def delete(self, user_id: int, agent_id: int, tool_id: str):
+        stmt = scalar(delete(ToolOAuthClientInfo).
+            where(and_(ToolOAuthClientInfo.user_id == user_id, ToolOAuthClientInfo.agent_id == agent_id, ToolOAuthClientInfo.tool_id == tool_id)))
+        await self._db.exec(stmt)
+        await self._db.commit()
+
+    async def cleanup(self, tool_id: str, ttl_minutes: int):
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl_minutes)
+        tool_id_parts = tool_id.split("-", 2)
+        # we store empty client id when client doesn't support authentication. There is no need to clean it since it doesn't contain any sensitive data
+        stmt = scalar(
+            delete(ToolOAuthClientInfo)
+            .where(and_(
+                ToolOAuthClientInfo.tool_id == tool_id if len(tool_id_parts) == 1 else col(ToolOAuthClientInfo.tool_id).like(f"{tool_id_parts[0]}-%"), 
+                ToolOAuthClientInfo.updated_at < cutoff, 
+                ToolOAuthClientInfo.client_id != "")))
+        await self._db.exec(stmt)
+        await self._db.commit()
+
+
+class AgentToolOAuthStorage(TokenStorage):
+
+    def __init__(self, user_id: int, agent_id: int, tool_id: str, db: AsyncSession, oauth: "AgentToolOauth"):
+        self._user_id = user_id
+        self._agent_id = agent_id
+        self._tool_id = tool_id
+        self._oauth_repo = ToolOAuthRepository(db)
+        self._client_info_repo = ToolOAuthClientInfoRepository(db)
+        self._oauth = oauth
+
+    async def get_tokens(self) -> Optional[OAuthToken]:
+        ret = await self._oauth_repo.find_token(self._user_id, self._agent_id, self._tool_id)
+        if ret:
+            self._oauth.context.token_expiry_time = ret.expires_at
+        return OAuthToken(
+            access_token=ret.access_token,
+            token_type="Bearer",
+            expires_in=ret.expires_in,
+            scope=ret.scope,
+            refresh_token=ret.refresh_token
+        ) if ret else None
+
+    async def set_tokens(self, tokens: OAuthToken):
+        await self._oauth_repo.save_token(ToolOAuthToken(
+            user_id=self._user_id, 
+            agent_id=self._agent_id,
+            tool_id=self._tool_id,
+            access_token=tokens.access_token,
+            token_type=ToolOAuthTokenType(tokens.token_type.lower()),
+            expires_in=tokens.expires_in,
+            scope=tokens.scope,
+            refresh_token=tokens.refresh_token,
+            expires_at=self._oauth.context.token_expiry_time
+        ))
+
+    async def get_client_info(self) -> Optional[OAuthClientInformationFull]:
+        ret = await self._client_info_repo.find_by_ids(self._user_id, self._agent_id, self._tool_id)
+        return OAuthClientInformationFull(
+            client_id=ret.client_id,
+            client_secret=ret.client_secret,
+            redirect_uris=[AnyHttpUrl(_build_redirect_uri(self._tool_id))]) if ret else None
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull):
+        info = ToolOAuthClientInfo(
+            user_id=self._user_id,
+            agent_id=self._agent_id,
+            tool_id=self._tool_id,
+            client_id=client_info.client_id,
+            client_secret=cast(str, client_info.client_secret),
+            scope=client_info.scope,
+            updated_at=datetime.now(timezone.utc)
+        )
+        await self._client_info_repo.save(info)
+
+
+def _build_redirect_uri(tool_id: str) -> str:
+    return f"{env.frontend_url}/tools/{tool_id}/oauth-callback"
+
+
+class UnsupportedClientRegistrationException(Exception):
+    pass
+
+
+class AgentToolOauth(OAuthClientProvider):
+
+    _DUMMY_URL = AnyHttpUrl("http://localhost")
+
+    def __init__(self, server_url: str, metadata: Optional[OAuthMetadata], scope: Optional[str], agent_id: int, tool_id: str, user_id: int, db: AsyncSession):
+        self._agent_id = agent_id
+        self._tool_id = tool_id
+        self._user_id = user_id
+        self._oauth_repo = ToolOAuthRepository(db)
+        self._http_client = httpx.AsyncClient()
+        client_metadata = OAuthClientMetadata(redirect_uris=[AnyHttpUrl(_build_redirect_uri(tool_id))], scope=scope)
+        super().__init__(
+            server_url,
+            client_metadata, 
+            AgentToolOAuthStorage(user_id, agent_id, tool_id, db, self), 
+            redirect_handler=self._redirect_handler, 
+            callback_handler=self._callback_handler
+        )
+        self.context.oauth_metadata = metadata
+        self.state = ""
+        self.code_verifier = ""
+    
+    @property
+    def server_url(self) -> str:
+        return self.context.server_url
+
+    # custom redirect handler that saves the state (to restore it in OAuth callback) and requests OAuth authentication flow       
+    async def _redirect_handler(self, auth_url: str):
+        tool_state = ToolOAuthState(
+            user_id=self._user_id, 
+            agent_id=self._agent_id,
+            tool_id=self._tool_id, 
+            state=self.state, 
+            code_verifier=self.code_verifier,
+            token_endpoint=self.context.oauth_metadata.token_endpoint.unicode_string() if self.context.oauth_metadata else None)
+        await self._oauth_repo.save_state(tool_state)
+        raise ToolOAuthRequest(auth_url, self.state)
+
+    # this is just to satisfy the callback_handler. It should never be called due to the redirect_handler
+    async def _callback_handler(self) -> tuple[str, str | None]:
+        return "", None
+    
+    # part of this logic is the same as async_auth_flow but instead of adding header to a request and doing the complete OAuth flow,
+    # a ToolOAuthRequest is raised when needed
+    async def solve_tokens(self) -> Optional[OAuthToken]:
+        async with self.context.lock:
+            if not self._initialized:
+                await self._initialize()
+            
+            # if client_id is empty then it means that the client doesn't support authentication
+            if not self.context.client_info or self.context.client_info.client_id:
+                try:
+                    await self.ensure_token()
+                except UnsupportedClientRegistrationException:
+                    return None
+            
+            return self.context.current_tokens
+    
+    # override this method to add a 1 minute buffer to the token expiry time to avoid 401 errors
+    def is_token_valid(self) -> bool:
+        if not self.context.current_tokens or not self.context.current_tokens.access_token:
+            return False
+
+        if self.context.token_expiry_time and self.context.token_expiry_time < time.time() + 60:
+            return False
+        
+        return True
+
+    async def ensure_token(self) -> None:
+        if self.is_token_valid():
+            return
+        
+        if self.context.can_refresh_token():
+            refresh_request = await self._refresh_token()
+            refresh_response = await self._http_request(refresh_request)
+
+            if not await self._handle_refresh_response(refresh_response):
+                self._initialized = False
+
+        await self._discover_oauth_metadata()
+
+        registration_request = await self._register_client()
+        if registration_request:
+            registration_response = await self._http_request(registration_request)
+            try:
+                await self._handle_registration_response(registration_response)
+            except OAuthRegistrationError as e:
+                # some mcp servers return 404 others may fail with 400 (eg: mcp playwright) when registration is not supported
+                if e.args and e.args[0].startswith("Registration failed: 4"):
+                    if not e.args[0].startswith("Registration failed: 404"):
+                        # we log it in case the registration actually fails and is not expected so later on admins can review it
+                        logger.warning("Client registration failed for %s", self.context.server_url, exc_info=e)
+                    self.context.client_info = OAuthClientInformationFull(client_id="", client_secret="", redirect_uris=[self._DUMMY_URL], token_endpoint_auth_method="none", grant_types=[], response_types=[])
+                    await self.context.storage.set_client_info(self.context.client_info)
+                    raise UnsupportedClientRegistrationException(e)
+                raise
+
+        await self._perform_authorization()
+
+    async def _http_request(self, request: httpx.Request) -> httpx.Response:
+        # This is a custom fix since some mcp servers (like playwright) require the client to accept both application/json and text/event-stream
+        request.headers["Accept"] = "application/json, text/event-stream"
+        return await self._http_client.send(request)
+
+    async def _discover_oauth_metadata(self) -> None:
+        # even though the contract of _discover_protected_resource says it expects an httpx.Response, you can actually pass None and it properly handles it
+        discovery_request = await self._discover_protected_resource(cast(httpx.Response, None))
+        discovery_response = await self._http_request(discovery_request)
+        await self._handle_protected_resource_response(discovery_response)
+
+        discovery_urls = self._get_discovery_urls()
+        for url in discovery_urls:
+            oauth_metadata_request = self._create_oauth_metadata_request(url)
+            oauth_metadata_response = await self._http_request(oauth_metadata_request)
+
+            if oauth_metadata_response.status_code == 200:
+                try:
+                    await self._handle_oauth_metadata_response(oauth_metadata_response)
+                    break
+                except ValidationError:
+                    continue
+            elif oauth_metadata_response.status_code < 400 or oauth_metadata_response.status_code >= 500:
+                break
+
+    async def _perform_authorization(self) -> tuple[str, str]:
+        # same as the one in auth.py from mcp library but stores code verifier and state in the class so when redirect is invoked it can store them to later resume the flow
+        if self.context.oauth_metadata and self.context.oauth_metadata.authorization_endpoint:
+            auth_endpoint = str(self.context.oauth_metadata.authorization_endpoint)
+        else:
+            auth_base_url = self.context.get_authorization_base_url(self.context.server_url)
+            auth_endpoint = urljoin(auth_base_url, "/authorize")
+
+        if not self.context.client_info:
+            raise OAuthFlowError("No client info available for authorization")
+
+        pkce_params = PKCEParameters.generate()
+        self.code_verifier = pkce_params.code_verifier
+        self.state = secrets.token_urlsafe(32)
+
+        auth_params = {
+            "response_type": "code",
+            "client_id": self.context.client_info.client_id,
+            "redirect_uri": str(self.context.client_metadata.redirect_uris[0]),
+            "state": self.state,
+            "code_challenge": pkce_params.code_challenge,
+            "code_challenge_method": "S256",
+        }
+
+        if self.context.should_include_resource_param(self.context.protocol_version):
+            auth_params["resource"] = self.context.get_resource_url()
+
+        if self.context.client_metadata.scope:
+            auth_params["scope"] = self.context.client_metadata.scope
+
+        authorization_url = f"{auth_endpoint}?{urlencode(auth_params)}"
+        await self._redirect_handler(authorization_url)
+
+    # part of this logic is the same as async_auth_flow after the callback is invoked
+    async def callback(self, auth_callback: ToolAuthCallback, state: ToolOAuthState):
+        if not self._initialized:
+            await self._initialize()
+            await self._discover_oauth_metadata()
+        try:
+            token_request = await self._exchange_token(cast(str, auth_callback.code), state.code_verifier)
+            token_response = await self._http_request(token_request)
+            await self._handle_token_response(token_response)
+        except Exception as e:
+            raise ToolOAuthCallbackError() if str(e).startswith("Token exchange failed: 401") else e

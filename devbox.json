@@ -1,0 +1,95 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.14.0/.schema/devbox.schema.json",
+  "packages": {
+    "python": "3.13",
+    "poetry": {
+      "version": "latest",
+      // this fails because is trying to find a pyproject.toml at the root of the project
+      "disable_plugin": true
+    },
+    // use this since 23.7.0 builds locally and takes a long time
+    "nodejs": "23.6.1",
+    "pnpm":   "latest"
+  },
+  "env": {
+    "VENV_DIR":             "$DEVBOX_PROJECT_ROOT/src/backend/.venv",
+    "DEVBOX_PYPROJECT_DIR": "$DEVBOX_PROJECT_ROOT/src/backend"
+  },
+  "shell": {
+    "scripts": {
+      "install": [
+        "cd src",
+        "pnpm --dir frontend install",
+        "cd backend",
+        "poetry install",
+        "cd ../..",
+        "[ -e '.env' ] || (cp src/sample.env .env && echo '.env file has been created, PLEASE CHECK THAT ALL PROPERTIES ARE PROPERLY SET!')"
+      ],
+      "postgres": [
+        "docker compose up --build postgres migrations"
+      ],
+      "keycloak": [
+        "docker compose up keycloak"
+      ],
+      "new-migration": [
+        "[[ -n $1 ]] || (echo 'Missing revision message!' && exit 1)",
+        "cd src/backend",
+        "poetry run alembic revision --autogenerate -m \"$1\""
+      ],
+      "migrations": [
+        "cd src/backend",
+        "poetry run alembic upgrade head"
+      ],
+      "generate-secret-key": [
+        "cd src/backend",
+        "poetry run python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+      ],
+      "backend": [
+        "cd src/backend",
+        "poetry run python -m tero 0"
+      ],
+      "frontend": [
+        "cd src/frontend",
+        "pnpm dev"
+      ],
+      "secrets-cleanup": [
+        "cd src/backend",
+        "poetry run python -m tero.secrets_cleanup"
+      ],
+      "playwright": [
+        "docker compose up playwright"
+      ],
+      "browser": [
+        "pnpm --dir src/browser-extension install",
+        "pnpm --dir src/browser-extension run dev --port 6173"
+      ],
+      "browser-build": [
+        "cd src/browser-extension",
+        "pnpm build",
+        "cd dist",
+        "[ ! -e browser-copilot.zip ] || rm browser-copilot.zip",
+        "zip -r browser-copilot.zip *"
+      ],
+      "update-python": [
+        "cd src/backend",
+        "poetry update"
+      ],
+      "check": [
+        "cd src/backend",
+        "poetry run pyright"
+      ],
+      "tests": [
+        "cd src/backend",
+        "poetry run pytest -vv $1"
+      ],
+      "docker-app": [
+        "docker compose up --build app"
+      ],
+      "docs": [
+        "cd docs",
+        "pnpm dev"
+      ]
+    }
+  }
+}
+

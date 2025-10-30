@@ -1,0 +1,43 @@
+<script lang="ts" setup>
+import { ref } from 'vue'
+import { IconCopy, IconCheck } from '@tabler/icons-vue'
+
+
+const props = defineProps<{ text: string, html: string }>()
+const copied = ref<boolean>(false)
+
+const copyToClipboard = async (text: string, html: string) => {
+  if (navigator && 'clipboard' in navigator) {
+    const plainMime = 'text/plain'
+    const htmlMime = 'text/html'
+    const data = [new ClipboardItem({
+      [htmlMime]: new Blob([html], { type: htmlMime }),
+      [plainMime]: new Blob([text], { type: plainMime }),
+    })];
+    await navigator.clipboard.write(data)
+  } else {
+    let tmp = document.createElement('textarea')
+    tmp.value = text
+    tmp.style.position = 'absolute'
+    tmp.style.visibility = 'hidden'
+    document.body.appendChild(tmp)
+    tmp.select()
+    document.execCommand('copy')
+    tmp.remove()
+  }
+}
+
+const copy = async () => {
+  await copyToClipboard(props.text, props.html)
+  copied.value = true
+  setTimeout(() => copied.value = false, 3000)
+}
+</script>
+
+<template>
+  <!-- fixed width to avoid redimension of message text when chainging copy button status -->
+  <button @click="copy">
+    <IconCopy class="text-light-gray hover:text-abstracta cursor-pointer" v-if="!copied" />
+    <IconCheck fade v-if="copied" class="text-primary" />
+  </button>
+</template>

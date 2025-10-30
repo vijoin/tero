@@ -1,0 +1,32 @@
+{
+  "$ref": "#/definitions/doc_node",
+  "description": "Simplified schema for Atlassian Document Format.",
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "definitions": {
+    "doc_node": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["doc"]},
+        "version": {"enum": [1]},
+        "content": {"type": "array", "items": {"$ref": "#/definitions/paragraph_node"}}
+      },
+      "required": ["type", "version", "content"]
+    },
+    "paragraph_node": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["paragraph"]},
+        "content": {"type": "array", "items": {"$ref": "#/definitions/text_node"}}
+      },
+      "required": ["type"]
+    },
+    "text_node": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["text"]},
+        "text": {"type": "string"}
+      },
+      "required": ["type", "text"]
+    }
+  }
+}

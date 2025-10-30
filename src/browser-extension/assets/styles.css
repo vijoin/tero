@@ -1,0 +1,3 @@
+/* this file is used to import the common styles including fonts, variables, tailwindcss, etc. */
+@import '@tero/common/assets/styles.css';
+@source "../../common/src/**/*.{js,ts,vue}";

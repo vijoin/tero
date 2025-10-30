@@ -1,0 +1,268 @@
+/* this file is used to import the common styles including fonts, variables, tailwindcss, etc. */
+@import '@tero/common/assets/styles.css';
+@source "../../../common/src/**/*.{js,ts,vue}";
+
+/* Override Prime Vue style */
+.p-tablist {
+  @apply w-fit m-auto p-4;
+}
+
+.p-tab {
+  @apply !font-normal;
+}
+
+.p-tab.p-tab-active {
+  @apply !font-medium;
+}
+
+.p-tablist-active-bar {
+  @apply !bg-primary !h-[4px];
+}
+
+.p-tab.p-tab-active:focus,
+.p-tab.p-tab-active:not(:focus) {
+  @apply !outline-none !border-none !ring-0 !shadow-none;
+}
+
+.p-select {
+  @apply !rounded-xl !font-medium !border-auxiliar-gray;
+}
+
+.p-select-label {
+  @apply !font-normal;
+}
+
+.p-select-dropdown {
+  @apply !text-light-gray;
+}
+
+.p-select.p-focus {
+  @apply !border-abstracta;
+}
+
+.p-select-option {
+  @apply !border-white !border;
+}
+
+.p-select-option.p-select-option-selected {
+  @apply !bg-pale !font-medium;
+}
+
+.p-select-option.p-focus {
+  @apply !bg-pale/50;
+}
+
+.p-select-option.p-focus:not(.p-select-option-selected) {
+  @apply !bg-pale/50 !border-1 !border-pale;
+}
+
+.p-selectbutton {
+  @apply !bg-white !rounded-xl !border !border-auxiliar-gray p-1;
+}
+
+.p-togglebutton {
+  @apply !bg-inherit !border-none !rounded-xl !p-0 !font-normal;
+}
+
+.p-togglebutton-label {
+  @apply text-light-gray;
+}
+
+.p-togglebutton-checked .p-togglebutton-content {
+  @apply !bg-abstracta;
+}
+
+.p-togglebutton-checked .p-togglebutton-label {
+  @apply !text-white;
+}
+
+.p-toggleswitch-handle {
+  @apply !bg-white !border-auxiliar-gray !border;
+}
+
+.p-toggleswitch-slider {
+  @apply !bg-pale !border-auxiliar-gray !border;
+}
+
+.p-toggleswitch-checked .p-toggleswitch-slider {
+  @apply !bg-abstracta;
+}
+
+.p-menu-separator {
+  @apply !border-t !border-pale mb-[2px];
+}
+
+.p-popover:before {
+  @apply !border-b-auxiliar-gray;
+}
+.p-popover {
+  @apply !border-auxiliar-gray;
+}
+
+.p-popover-content {
+  @apply !p-2 !text-sm;
+}
+
+.p-autocomplete-list-container .p-autocomplete-option.p-autocomplete-option-selected {
+  @apply !bg-pale !font-medium;
+}
+
+.p-autocomplete-list-container .p-autocomplete-option.p-focus {
+  @apply !bg-pale/50;
+}
+
+.p-autocomplete-list-container .p-autocomplete-option.p-focus:not(.p-autocomplete-option-selected) {
+  @apply !bg-pale/50;
+}
+
+.p-autocomplete .p-inputtext,
+.p-autocomplete .p-autocomplete-dropdown {
+  @apply bg-transparent border-auxiliar-gray;
+}
+
+.p-autocomplete .p-inputtext:hover,
+.p-autocomplete .p-autocomplete-dropdown:hover {
+  @apply !bg-transparent border-auxiliar-gray;
+}
+
+.p-autocomplete .p-inputtext:focus,
+.p-autocomplete .p-autocomplete-dropdown:focus {
+  @apply outline-abstracta ring-abstracta border-abstracta;
+}
+
+.p-autocomplete .p-inputtext::placeholder,
+.p-autocomplete .p-autocomplete-dropdown::placeholder {
+  @apply text-light-gray;
+}
+
+.p-autocomplete .p-inputtext {
+  @apply border-r-0 rounded-xl rounded-r-none;
+}
+
+.p-autocomplete .p-autocomplete-dropdown {
+  @apply border-l-0 rounded-xl rounded-l-none;
+}
+
+.p-autocomplete.error .p-inputtext {
+  @apply border-error;
+}
+
+.p-autocomplete.error .p-autocomplete-dropdown {
+  @apply border-error;
+}
+
+.p-autocomplete .p-inputtext:focus + .p-autocomplete-dropdown {
+  @apply !outline-abstracta !ring-abstracta !border-abstracta !border-l-0;
+}
+
+.p-autocomplete-overlay .p-autocomplete-option.p-focus {
+  @apply !bg-pale;
+}
+
+.p-datepicker-input {
+  @apply !rounded-xl;
+}
+
+.p-datepicker-day-selected {
+  @apply !bg-primary !text-white;
+}
+
+/* Override Prime Vue style */
+
+/* Hide last row border */
+.p-datatable .p-datatable-tbody > tr:last-child > td {
+  @apply !border-b-0;
+}
+
+.p-datatable-header-cell,
+.p-datatable .p-datatable-tbody > tr > td {
+  @apply !border-auxiliar-gray;
+}
+
+/* Responsive (Tested resolutions) */
+.column-gap {
+  @apply grid grid-cols-3 gap-4 py-4;
+}
+
+.grid-wrapper {
+  @apply px-6 max-w-full mx-auto;
+}
+
+.grid-card {
+  @apply rounded-2xl flex flex-col h-[160px];
+}
+
+/* 1024 x 768 specific */
+@media (width: 1024px) {
+  #sidebar {
+    @apply !w-2xs;
+  }
+  .p-tablist {
+    @apply w-xl overflow-x-auto;
+  }
+}
+
+/* 1024 x 768 and higher */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .grid-wrapper {
+    @apply !w-2xl py-2;
+  }
+}
+
+/* 1280 x 720, 1366 x 768, 1440 x 900 and higher */
+@media (min-width: 1280px) and (max-width: 1599px) {
+  .grid-wrapper {
+    @apply w-4xl;
+  }
+  .column-gap {
+    @apply grid-cols-3;
+  }
+}
+
+/* 1600 x 900, 1920 x 1080, 2560 x 1440, 3840 x 2160 */
+@media (min-width: 1600px) and (max-width: 3840px) {
+  .grid-wrapper {
+    @apply w-6xl;
+  }
+  .column-gap {
+    @apply grid-cols-4;
+  }
+}
+
+
+/* Markdown formatting */
+
+.formatted-text {
+  @apply leading-snug;
+}
+.formatted-text hr {
+  @apply hidden;
+}
+.formatted-text h1, .formatted-text h2 {
+  @apply text-xl my-2.5;
+}
+.formatted-text h3, .formatted-text h4 {
+  @apply my-0.5 font-normal;
+}
+.formatted-text ul,
+.message ol {
+  @apply mb-2.5;
+}
+.formatted-text p {
+  @apply my-1.5;
+}
+.formatted-text li {
+  @apply ml-4 my-2;
+}
+.formatted-text ul li ul li {
+  @apply list-[circle];
+}
+.formatted-text strong {
+  @apply font-medium;
+}
+.formatted-text p br {
+  @apply my-2.5;
+}
+.copy-code-btn svg {
+  @apply size-4 mr-1;
+}

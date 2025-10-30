@@ -1,0 +1,67 @@
+name: run tests
+on:
+  push:
+    tags-ignore:
+      - "*"
+    branches:
+      - "**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: 'pnpm'
+          cache-dependency-path: 'src/pnpm-lock.yaml'
+      - name: Build
+        working-directory: src/frontend
+        run: |
+          pnpm install
+          pnpm build
+
+  build-browser-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: 'pnpm'
+          cache-dependency-path: 'src/pnpm-lock.yaml'
+      - name: Build
+        working-directory: src/browser-extension
+        run: |
+          pnpm install
+          pnpm run zip
+
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install poetry
+        run: pipx install poetry
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'poetry'
+          cache-dependency-path: 'src/backend/poetry.lock'
+      - name: Test
+        working-directory: src/backend
+        run: |
+          poetry install
+          poetry run pyright
+          cp ../sample.env ../../.env
+          poetry run alembic revision

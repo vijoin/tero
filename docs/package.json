@@ -1,0 +1,19 @@
+{
+  "name": "tero",
+  "description": "Collaborative and secure AI agents platform that empowers software quality",
+  "type": "module",
+  "scripts": {
+    "build": "vuepress build .",
+    "dev": "vuepress dev ."
+  },
+  "devDependencies": {
+    "@tabler/icons-webfont": "^3.35.0",
+    "@vuepress/bundler-vite": "2.0.0-rc.20",
+    "@vuepress/plugin-markdown-include": "2.0.0-rc.116",
+    "@vuepress/plugin-search": "2.0.0-rc.116",
+    "@vuepress/theme-default": "2.0.0-rc.88",
+    "sass-embedded": "^1.86.0",
+    "vue": "^3.5.13",
+    "vuepress": "2.0.0-rc.20"
+  }
+}

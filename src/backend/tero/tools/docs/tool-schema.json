@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "/tools/tool-schema.json#/$defs/File"
+      },
+      "description": "List of files to later be able to ask questions from"
+    },
+    "advancedFileProcessing": {
+      "type": "boolean",
+      "description": "Whether to use advanced file processing to process PDF files"
+    }
+  },
+  "required": ["files", "advancedFileProcessing"],
+  "additionalProperties": false
+}

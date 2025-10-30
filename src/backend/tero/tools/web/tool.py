@@ -1,0 +1,196 @@
+import ast
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+import logging
+from typing import Annotated, Any, List, Optional, Tuple, Union
+
+from bs4 import BeautifulSoup
+import httpx
+from langchain_core.callbacks import Callbacks
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import ArgsSchema, BaseTool, InjectedToolCallId
+from langchain_google_community import GoogleSearchAPIWrapper, GoogleSearchResults
+from langchain_tavily import TavilyExtract, TavilySearch
+from pydantic import BaseModel, Field
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from ...agents.domain import Agent
+from ...core.env import env
+from ...usage.domain import ToolUsage, UsageType
+from ..core import AgentTool, AgentToolConfig, AgentToolMetadata, load_schema, StatusUpdateCallbackHandler
+
+
+logger = logging.getLogger(__name__)
+WEB_TOOL_ID = "web"
+SEARCH_NUM_RESULTS = 5
+
+
+class WebSearchToolArgs(BaseModel):
+    query: str = Field(description="The query to search for")
+    tool_call_id: Annotated[str, InjectedToolCallId]
+
+def parse_result_search(result: str) -> List[str]:
+    return [f"{e.get('url')}: {e.get('content')[0:200]}" for e in ast.literal_eval(result).get("results")]
+
+class WebSearchLangchainTool(BaseTool):
+    name: str = "web_search"
+    description: str = "Searches the web for the given query"
+    args_schema: Optional[ArgsSchema] = WebSearchToolArgs
+    callbacks: Callbacks = [StatusUpdateCallbackHandler(name, description=description,
+        response_parser=parse_result_search, 
+        params_parser=lambda params: ast.literal_eval(params).get("query"))]
+
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError("Synchronous run not implemented.")
+    
+    async def google_search(self, query: str) -> Tuple[List[Union[str, dict]], ToolUsage]:
+        if not env.web_tool_google_api_key or not env.web_tool_google_custom_search_engine_id:
+            raise ValueError("Google Search API key or Custom Search Engine ID is not set.")
+
+        search_api_wrapper = GoogleSearchAPIWrapper(
+            google_api_key=env.web_tool_google_api_key.get_secret_value(),
+            google_cse_id=env.web_tool_google_custom_search_engine_id,
+        )
+
+        search_results = GoogleSearchResults(
+            api_wrapper=search_api_wrapper,
+            num_results=SEARCH_NUM_RESULTS
+        )
+        results = await search_results.ainvoke({"query": query})
+        tool_usage = ToolUsage(type=UsageType.WEB_SEARCH, quantity=1, cost_per_1k_units=env.web_tool_google_cost_per_1k_searches_usd)
+        return results, tool_usage
+    
+    async def tavily_search(self, query: str) -> Tuple[List[Union[str, dict]], ToolUsage]:
+        tavily_search = TavilySearch(
+            tavily_api_key=env.web_tool_tavily_api_key,
+            search_depth="basic",
+            max_results=SEARCH_NUM_RESULTS
+        )
+        results = await tavily_search.ainvoke({"query": query})
+        tool_usage = ToolUsage(type=UsageType.WEB_SEARCH, quantity=1, cost_per_1k_units=env.web_tool_tavily_cost_per_1k_credits_usd)
+        return results, tool_usage
+    
+    async def _arun(self, *args: Any, **kwargs: Any) -> ToolMessage:
+        query = kwargs.get("query")
+        if not query:
+            raise ValueError("Query is required")
+
+        if env.web_tool_tavily_api_key:
+            results, tool_usage = await self.tavily_search(query)   
+        elif env.web_tool_google_api_key and env.web_tool_google_custom_search_engine_id:
+            results, tool_usage = await self.google_search(query)
+        else:
+            raise ValueError("No API key provided for web search")
+        
+        return ToolMessage(
+            tool_call_id=kwargs.get("tool_call_id"),
+            name=self.name,
+            content=results,    
+            response_metadata=AgentToolMetadata(tool_usage=tool_usage).model_dump()
+        )
+
+class WebExtractToolArgs(BaseModel):
+    urls: List[str] = Field(description="The URLs to extract text from")
+    tool_call_id: Annotated[str, InjectedToolCallId]
+
+def parse_result_extract(result: Any) -> List[str]:
+    return [f"{e.get('url')}: {e.get('raw_content', e.get('error'))[:200]}" for e in result] if isinstance(result, list) else result
+
+class WebExtractLangchainTool(BaseTool):
+    name: str = "web_extract"
+    description: str = "Extracts text from the given URLs"
+    args_schema: Optional[ArgsSchema] = WebExtractToolArgs
+    callbacks: Callbacks = [StatusUpdateCallbackHandler(name, description=description,
+        response_parser=parse_result_extract, 
+        params_parser=lambda params: ", ".join(ast.literal_eval(params).get("urls")))]
+
+    def __init__(self, max_extract_length: int):
+        super().__init__()
+        self._max_extract_length = max_extract_length
+
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError("Synchronous run not implemented.")
+    
+    async def tavily_extract(self, urls: List[str]) -> Tuple[List[Union[str, dict]], ToolUsage]:
+        tool = TavilyExtract(
+            tavily_api_key=env.web_tool_tavily_api_key,
+            extract_depth="basic",
+            include_images=False,
+        )
+        tool_usage = ToolUsage(type=UsageType.WEB_EXTRACT, quantity=1, cost_per_1k_units=env.web_tool_tavily_cost_per_1k_credits_usd)
+        results = await tool.ainvoke({"urls": urls})
+        if isinstance(results, dict):
+            failed_results = results.get("failed_results", [])
+            results = results.get("results", [])
+            max_extract_length_per_result = int(self._max_extract_length / len(results)) if results else self._max_extract_length
+            for result in results:
+                raw_content_length = len(result["raw_content"])
+                if raw_content_length > max_extract_length_per_result:
+                    result["raw_content"] = result["raw_content"][:max_extract_length_per_result]
+                    logger.warning(f"Web extract result truncated from {raw_content_length} to {max_extract_length_per_result} characters for {result['url']}")
+            results.extend(failed_results)
+        return results, tool_usage
+    
+    async def bs4_extract(self, urls: List[str]) -> Tuple[List[Union[str, dict]], Optional[ToolUsage]]:
+        results = []
+        async with httpx.AsyncClient(timeout=10) as client:
+            for url in urls:
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    text = soup.get_text(separator=" ", strip=True)
+                    results.append({"url": url, "text": text})
+                except Exception as e:
+                    results.append({"url": url, "error": str(e)})
+        return results, None
+
+    async def _arun(self, *args: Any, **kwargs: Any) -> ToolMessage:
+        urls = kwargs.get("urls")
+        if not urls:
+            raise ValueError("URLs are required")
+
+        results, tool_usage = await self.tavily_extract(urls) if env.web_tool_tavily_api_key else await self.bs4_extract(urls)
+
+        return ToolMessage(
+            tool_call_id=kwargs.get("tool_call_id"),
+            name=self.name,
+            content=results,
+            response_metadata=AgentToolMetadata(tool_usage=tool_usage).model_dump()
+        )
+
+class WebTool(AgentTool):
+    id: str = WEB_TOOL_ID
+    name: str = "Web Tools"
+    description: str = (
+        "Provides web search and web extraction capabilities."
+    )
+    config_schema: dict = load_schema(__file__)
+
+    async def _setup_tool(self, prev_config: Optional[AgentToolConfig]) -> Optional[dict]:
+        pass
+
+    async def teardown(self):
+        pass
+
+    @asynccontextmanager
+    async def load(self) -> AsyncIterator['WebTool']:
+        yield self
+
+    async def clone(
+        self,
+        agent_id: int,
+        cloned_agent_id: int,
+        tool_id: str,
+        user_id: int,
+        db: AsyncSession,
+    ) -> None:
+        pass
+
+    async def build_langchain_tools(self) -> List[BaseTool]:
+        tools = []
+        if env.web_tool_google_api_key and env.web_tool_google_custom_search_engine_id or env.web_tool_tavily_api_key:
+            tools.append(WebSearchLangchainTool())
+        # Set max characters for web extraction to half of the available input tokens to prevent overflow
+        tools.append(WebExtractLangchainTool(max_extract_length=int((self.agent.model.token_limit) / 2)))
+        return tools

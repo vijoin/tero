@@ -1,0 +1,384 @@
+import asyncio
+from contextlib import AsyncExitStack
+from enum import Enum
+import io
+import json
+import logging
+from typing import Annotated, Optional, List, AsyncIterator, cast
+
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Request, File as FastAPIFile
+from fastapi.responses import StreamingResponse
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sse_starlette.event import ServerSentEvent
+
+from ..agents.repos import AgentRepository
+from ..ai_models import ai_factory
+from ..core.api import BASE_PATH
+from ..core.auth import get_current_user
+from ..core.domain import CamelCaseModel
+from ..core.env import env
+from ..core.repos import get_db
+from ..files.api import build_file_download_response
+from ..files.domain import File, FileStatus, FileMetadata, FileProcessor, FileMetadataWithContent
+from ..files.parser import add_encoding_to_content_type, extract_file_text
+from ..files.file_quota import FileQuota, CurrentQuota, QuotaExceededError
+from ..files.repos import FileRepository
+from ..tools.oauth import ToolOAuthRequest, build_tool_oauth_request_http_exception
+from ..usage.domain import Usage, UsageType, MessageUsage    
+from ..usage.repos import UsageRepository
+from ..users.domain import User
+from .domain import ThreadListItem, Thread, ThreadMessage, ThreadMessageOrigin, ThreadUpdate,\
+    ThreadMessagePublic, ThreadMessageFile, ThreadMessageUpdate, AgentActionEvent, AgentFileEvent,\
+    AgentMessageEvent, ThreadTranscriptionResult
+from .engine import build_thread_name, AgentEngine
+from .time_saved_estimation import estimate_minutes_saved
+from .repos import ThreadRepository, ThreadMessageRepository, ThreadMessageFileRepository
+
+
+THREADS_PATH = f"{BASE_PATH}/threads"
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+active_streaming_connections: dict[int, asyncio.Event] = {}
+
+
+@router.get(THREADS_PATH)
+async def find_threads(user: Annotated[User, Depends(get_current_user)],
+                       db: Annotated[AsyncSession, Depends(get_db)],
+                       text: Optional[str] = None,
+                       limit: int = 10,
+                       agent_id: Optional[int] = None,
+                       exclude_empty: bool = False) -> List[ThreadListItem]:
+    return await ThreadRepository(db).find_by_text(text, user.id, limit, agent_id, exclude_empty)
+
+
+class ThreadCreateApi(CamelCaseModel):
+    agent_id: int
+
+
+@router.post(THREADS_PATH, status_code=status.HTTP_201_CREATED)
+async def start_thread(thread: ThreadCreateApi, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)]) -> ThreadListItem:
+    agent = await AgentRepository(db).find_by_id(thread.agent_id)
+    if not agent or not agent.is_visible_by(user):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Agent not found")
+    repo = ThreadRepository(db)
+    empty_thread = await repo.find_empty_thread(thread.agent_id, user.id)
+    if empty_thread:
+        return ThreadListItem.from_thread(empty_thread)
+    ret = await repo.add(Thread(agent_id=thread.agent_id, user_id=user.id))
+    return ThreadListItem.from_thread(ret)
+
+
+THREAD_PATH = f"{THREADS_PATH}/{{thread_id}}"
+
+
+@router.get(THREAD_PATH)
+async def find_thread(thread_id: int, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)]) -> ThreadListItem:
+    ret = await _find_thread(thread_id, user.id, db)
+    return ThreadListItem.from_thread(ret)
+
+
+async def _find_thread(thread_id: int, user_id: int, db: AsyncSession) -> Thread:
+    ret = await ThreadRepository(db).find_by_id(thread_id, user_id)
+    if not ret:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return ret
+
+
+@router.put(THREAD_PATH)
+async def update_thread(thread_id: int, thread: ThreadUpdate, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)]) -> ThreadListItem:
+    ret = await _find_thread(thread_id, user.id, db)
+    ret.update_with(thread)
+    await ThreadRepository(db).update(ret)
+    return ThreadListItem.from_thread(ret)
+
+
+@router.delete(THREAD_PATH, status_code=status.HTTP_204_NO_CONTENT)
+async def delete_thread(thread_id: int, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)]) -> None:
+    thread = await _find_thread(thread_id, user.id, db)
+    await ThreadRepository(db).delete(thread)
+
+
+THREAD_MESSAGES_PATH = f"{THREAD_PATH}/messages"
+
+
+@router.get(THREAD_MESSAGES_PATH, response_model=List[ThreadMessagePublic])
+async def find_messages(thread_id: int, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)]) -> List[ThreadMessagePublic]:
+    thread = await _find_thread(thread_id, user.id, db)
+    messages = await ThreadMessageRepository(db).find_by_thread_id(thread.id)
+    return _map_messages_to_tree(messages)
+
+
+def _map_messages_to_tree(messages: List[ThreadMessage]) -> List[ThreadMessagePublic]:
+    public_messages = [ThreadMessagePublic.from_message(msg) for msg in messages]
+    message_lookup = {msg.id: msg for msg in public_messages}
+    tree = []
+    for msg in public_messages:
+        if msg.parent_id in message_lookup:
+            message_lookup[msg.parent_id].children.append(msg)
+        else:
+            tree.append(msg)
+    return tree
+
+
+class ThreadMessageOriginApi(Enum):
+    USER = "USER"
+
+
+@router.post(THREAD_MESSAGES_PATH, status_code=status.HTTP_201_CREATED)
+async def add_message(thread_id: int, request: Request, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)], files: List[UploadFile] = []) -> StreamingResponse:
+    thread = await _find_thread(thread_id, user.id, db)
+    current_usage = await UsageRepository(db).find_current_month_user_usage_usd(user.id)
+    if current_usage >= user.monthly_usd_limit:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="quotaExceeded")
+    
+    form = await request.form()
+    message_text = cast(str, form.get("text", ""))
+    message_origin = cast(str, form.get("origin", "USER"))
+    file_ids_str = cast(str, form.get("fileIds"))
+    file_ids = [ int(file_id) for file_id in file_ids_str.split(",") ] if file_ids_str else []
+    parent_message_id_str = cast(Optional[str], form.get("parentMessageId"))
+    is_in_agent_edition = cast(str, form.get("isInAgentEdition", "false")).lower() == "true"
+    parent_message_id = int(parent_message_id_str) if parent_message_id_str else None
+
+    if parent_message_id is not None:
+        await _check_parent_message_id_exists(parent_message_id, thread.id, db)
+    existing_files = [ await _find_thread_message_file(thread_id, file_id, db) for file_id in file_ids ]
+    try:
+        # initialize engine so any tool authentication requirements are triggered before creating anything on db
+        engine = AgentEngine(thread.agent, user.id, db)
+        async with AsyncExitStack() as stack:
+            await engine.load_tools(stack)
+        
+        initial_thread_message = ThreadMessage(
+            thread_id=thread.id,
+            text=message_text,
+            origin=ThreadMessageOrigin[message_origin],
+            parent_id=parent_message_id
+        )
+        repo = ThreadMessageRepository(db)
+        user_message = await repo.add(initial_thread_message)
+        
+        await _attach_existing_files_to_message(existing_files, user_message, db)
+        await _handle_file_contents(files, user_message, user, thread, engine, db)
+        user_message = await repo.refresh_with_files(user_message)
+
+        return StreamingResponse(
+            _agent_response(user_message, thread, user.id, db, is_in_agent_edition),
+            media_type="text/event-stream",
+        )
+    except ToolOAuthRequest as e:
+        raise build_tool_oauth_request_http_exception(e)
+    
+    except QuotaExceededError:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="quotaExceeded")
+
+
+async def _check_parent_message_id_exists(parent_message_id: int, thread_id: int, db: AsyncSession):
+    existing_message = await ThreadMessageRepository(db).find_by_thread_id_and_message_id(thread_id, parent_message_id)
+    if not existing_message:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST)
+
+
+async def _find_thread_message_file(thread_id: int, file_id: int, db: AsyncSession) -> ThreadMessageFile:
+    ret = await ThreadMessageFileRepository(db).find_by_thread_id_and_file_id(thread_id, file_id)
+    if not ret:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST)
+    return ret
+
+
+async def _attach_existing_files_to_message(files: List[ThreadMessageFile], user_message: ThreadMessage, db: AsyncSession):
+    repo = ThreadMessageFileRepository(db)
+    for f in files:
+        await repo.add(ThreadMessageFile(thread_message_id=user_message.id, file_id=f.file_id))
+
+
+async def _handle_file_contents(files: List[UploadFile], user_message: ThreadMessage, user: User, thread: Thread, engine: AgentEngine, db: AsyncSession):
+    file_repo = FileRepository(db)
+    if files:
+        for f in files:
+            content = await f.read()
+            content_type = add_encoding_to_content_type(f.content_type, content)
+            file_processor = FileProcessor.ENHANCED if env.azure_doc_intelligence_endpoint and env.azure_doc_intelligence_key else FileProcessor.BASIC
+            file = File(name=f.filename or "uploaded-file", content_type=content_type, content=content, user_id=user.id, file_processor=file_processor)
+            pdf_parsing_usage = Usage(message_id=user_message.id, user_id=user.id, agent_id=thread.agent_id, model_id=None, type=UsageType.PDF_PARSING)
+            current_usage = await UsageRepository(db).find_current_month_user_usage_usd(user.id)
+            file_quota = FileQuota(pdf_parsing_usage, engine, CurrentQuota(current_usage, user.monthly_usd_limit))
+            try:
+                file.processed_content = await extract_file_text(file, file_quota)
+                file.status = FileStatus.PROCESSED
+                saved_file = await file_repo.add(file)
+                await ThreadMessageFileRepository(db).add(ThreadMessageFile(thread_message_id=user_message.id, file_id=saved_file.id))                    
+            
+            finally:
+                await UsageRepository(db).add(pdf_parsing_usage)
+
+
+async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, db: AsyncSession, is_in_agent_edition: bool) \
+        -> AsyncIterator[bytes]:
+    message_usage = None
+    yield ServerSentEvent(event="userMessage", data=json.dumps({
+        "id": message.id, 
+        "files": [FileMetadata.from_file(f.file).model_dump(mode="json", by_alias=True) for f in message.files if f.file]
+    })).encode()
+    try:
+        stop_event = asyncio.Event()
+        active_streaming_connections[thread.id] = stop_event
+
+        repo = ThreadMessageRepository(db)
+        message_usage = MessageUsage(user_id=user_id, agent_id=thread.agent_id, model_id=thread.agent.model_id, message_id=message.id)
+        thread_messages = await repo.find_previous_messages(message)
+            
+        if len(thread_messages) == 0:
+            thread.name = await build_thread_name(message.text, message_usage, db)
+            await ThreadRepository(db).update(thread)
+            
+        answer_stream = AgentEngine(thread.agent, user_id, db).answer([*thread_messages, message], message_usage, stop_event)
+        complete_answer = ""
+        files: List[FileMetadata] = []
+        async for event in answer_stream:
+            if isinstance(event, AgentActionEvent):
+                payload = json.dumps(event.model_dump(mode="json", by_alias=True))
+                yield ServerSentEvent(event="status", data=payload).encode()
+            elif isinstance(event, AgentFileEvent):
+                files.append(event.file)
+            elif isinstance(event, AgentMessageEvent):
+                complete_answer = complete_answer + event.content
+                yield ServerSentEvent(data=event.content).encode()
+            else:
+                raise RuntimeError(f"Unsupported event type: {type(event)}")
+
+        if stop_event.is_set() or is_in_agent_edition:
+            minutes_saved = 0
+        else:
+            minutes_saved = await estimate_minutes_saved(
+                user_message=message.text,
+                agent_response=complete_answer,
+                thread=thread,
+                thread_messages=thread_messages,
+                message_usage=message_usage,
+                db=db
+            )
+
+        answer = await repo.add(ThreadMessage(
+            thread_id=thread.id,
+            text=complete_answer,
+            origin=ThreadMessageOrigin.AGENT,
+            parent_id=message.id,
+            minutes_saved=minutes_saved,
+            stopped=stop_event.is_set()
+        ))
+        for f in files:
+            await ThreadMessageFileRepository(db).add(ThreadMessageFile(thread_message_id=answer.id, file_id=f.id))
+        
+        yield ServerSentEvent(event="metadata", data=json.dumps({
+            "answerMessageId": answer.id,
+            "files": [f.model_dump(mode="json", by_alias=True) for f in files],
+            "minutesSaved": answer.minutes_saved,
+            "stopped": answer.stopped
+        })).encode()
+    except Exception:
+        logger.exception("Problem answering message")
+        yield ServerSentEvent(event="error").encode()
+    finally:
+        await UsageRepository(db).add(message_usage)
+        del active_streaming_connections[thread.id]
+
+
+@router.post(THREAD_PATH + "/stop", status_code=status.HTTP_200_OK)
+async def stop_message(thread_id: int,
+                      user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    stop_event = active_streaming_connections.get(thread_id)
+    if stop_event:
+        stop_event.set()
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+
+
+THREAD_MESSAGE_PATH = f"{THREAD_PATH}/messages/{{message_id}}"
+
+
+@router.put(THREAD_MESSAGE_PATH)
+async def update_message(thread_id: int, message_id: int, updated_message: ThreadMessageUpdate,
+                      user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    thread = await _find_thread(thread_id, user.id, db)
+    thread_message = await _find_thread_message(message_id, db)
+    has_positive_feedback = thread_message.has_positive_feedback
+    thread_message.update_with(updated_message)
+    if has_positive_feedback is not None and updated_message.has_positive_feedback is None:
+        minutes_saved = 0
+        thread_message_repo = ThreadMessageRepository(db)
+        if thread_message.parent_id is not None:
+            parent_message = cast(ThreadMessage, await thread_message_repo.find_by_id(thread_message.parent_id))
+            message_usage = MessageUsage(user_id=user.id, agent_id=thread.agent_id, model_id=env.internal_generator_model, message_id=parent_message.id)
+            minutes_saved = await estimate_minutes_saved(
+                user_message=parent_message.text,
+                agent_response=thread_message.text,
+                thread=thread,
+                thread_messages=await thread_message_repo.find_previous_messages(parent_message),
+                message_usage=message_usage,
+                db=db
+            )
+            await UsageRepository(db).add(message_usage)
+        thread_message.minutes_saved = minutes_saved
+    await ThreadMessageRepository(db).update(thread_message)
+    return thread_message
+
+
+async def _find_thread_message(message_id:int, db: AsyncSession) -> ThreadMessage:
+    ret = await ThreadMessageRepository(db).find_by_id(message_id)
+    if not ret:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return ret
+
+THREAD_FILE_PATH = f"{THREAD_PATH}/files/{{file_id}}"
+
+
+@router.get(THREAD_FILE_PATH)
+async def find_thread_file(thread_id: int, file_id: int, user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]) -> FileMetadataWithContent:
+    await _find_thread(thread_id, user.id, db)
+    message_file = await ThreadMessageFileRepository(db).find_by_thread_id_and_file_id(thread_id, file_id)
+    if not message_file:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    file = cast(File, await FileRepository(db).find_by_id(message_file.file_id))
+    return FileMetadataWithContent.from_file(file)
+
+
+@router.get(f"{THREAD_FILE_PATH}/content")
+async def download_thread_file(thread_id: int, file_id: int, user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]) -> StreamingResponse:
+    await _find_thread(thread_id, user.id, db)
+    file = await ThreadMessageFileRepository(db).find_with_content_by_ids(thread_id, file_id)
+    return build_file_download_response(file)
+
+
+AUDIO_FORMAT = "audio/webm"
+
+
+@router.post(f"{THREAD_PATH}/transcriptions")
+async def get_transcript(user: Annotated[User, Depends(get_current_user)], thread_id: int, file: UploadFile = FastAPIFile(...)) -> ThreadTranscriptionResult:
+    return await transcribe_audio(file, env.transcription_model)
+
+
+async def transcribe_audio(file: UploadFile, model: str) -> ThreadTranscriptionResult:
+    provider = ai_factory.get_provider(model)
+    if file.content_type != AUDIO_FORMAT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"File type invalid: {file.content_type}"
+        )
+
+    audio_file = await _prepare_audio_file(file)
+    transcription = await provider.transcribe_audio(audio_file, model)
+    return ThreadTranscriptionResult(transcription=transcription)
+
+
+async def _prepare_audio_file(file: UploadFile) -> io.BytesIO:
+    file_bytes = await file.read()
+    audio_file = io.BytesIO(file_bytes)
+    audio_file.name = file.filename
+    return audio_file
