@@ -10,7 +10,7 @@ Agents use the current conversation as context. Because LLMs (used by agents to 
 It usually works best to keep each chat focused on a single task or goal. Start a new chat when you switch topics. You’ll get clearer answers and you’ll spend less budget (more text to analyze = more cost).
 :::
 
-::: tip Be precise and divied & conquer
+::: tip Be precise and divide & conquer
 Avoid vague, multi-part requests. Break complex tasks into smaller steps and send one clear request per step. The more specific you are, the better the results.
 :::
 
@@ -21,6 +21,20 @@ Ask the agent to use Markdown for cleaner results: headings, lists, code blocks,
 ::: tip Chat names
 Each new chat gets an automatic name from your first message. Rename it anytime so it’s easy to find later.
 :::
+
+## Budget
+
+Every interaction with an agent — chat messages, file uploads, transcript requests, and tool usage — consumes budget.
+
+Budget helps keep Tero costs in line and promotes efficient use for individuals and teams.
+
+Each Tero instance can set different limits, and users may have different allocations. If you need more, ask your Tero instance admins.
+
+For practical ways to optimize budget, follow the guidance throughout this page (e.g., Files, Thought Process) and see [Create Agents](./agents.md) for additional tips.
+
+:::: note Track usage
+Check “Usage” in the sidebar to see your current monthly budget usage.
+::::
 
 ## Files
 
@@ -37,7 +51,6 @@ For large documents, consider a quick pass first: summarize, extract key section
 ::: warning PDF files
 If Azure Document Intelligence is enabled in your Tero instance, PDFs are parsed a lot more accurately than with the default parser — but it’s also a lot more expensive. Be selective when uploading PDFs and consider preprocessing them to minimize unnecessary budget consumption.
 :::
-
 
 ## Transcriptions
 
@@ -64,7 +77,6 @@ Team leaders where the agent is published can edit shared prompts.
 
 Conversation starters are a special type of shared prompts defined when creating the agent. They show up at the top of every new chat and help new users get going quickly.
 
-
 ## Thought Process
 
 After each answer, you’ll see a “thought process” section that shows tool calls, parameters, outputs, and more. It’s there so you can:
@@ -75,7 +87,6 @@ After each answer, you’ll see a “thought process” section that shows tool 
 :::: warning Agent steps limit
 Every agent has a limit on how many steps it can take per request. This prevents infinite loops and unnecessary budget spend. If a request hits the limit, you’ll see an error. Keep things simple, and split big asks into smaller steps.
 ::::
-
 
 ## Saved Time
 
@@ -95,7 +106,6 @@ Estimates are AI-generated and get better with your feedback and the community�
 
 Finding a proper way of estimating time saved is not easy, since it depends on various factors, but Tero team is periodically reviewing this process and adjusting it to make estimations better.
 
-
 ## Edit Messages
 
 You can edit any message. When you do, a new branch of the conversation is created. Each branch is independent — effectively its own chat — so you can explore alternatives without losing your original thread.
@@ -106,4 +116,4 @@ You can browse past chats with the same agent. It’s useful to compare answers 
 
 ## Adjust Agent
 
-Need the agent to behave differently and you’re not an editor (owner or team leader where it’s published)? Clone the agent and edit your copy. It’s a safe space to tailor behavior to a project or workflow. Share it back if it proves helpful!
+Need the agent to behave differently and you’re not an editor (owner or team leader where it’s published)? Clone the agent and edit your copy. It’s a safe way to tailor behavior to a project or workflow. Share it back if it proves helpful!

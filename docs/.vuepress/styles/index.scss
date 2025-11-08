@@ -48,3 +48,8 @@
 .vp-navbar .search-box:focus input {
     border-color: var(--vp-c-accent);
 }
+
+// Avoid vertical text in headers
+[vp-content] h1 {
+  display: inline;
+}

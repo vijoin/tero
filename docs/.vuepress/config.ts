@@ -30,10 +30,7 @@ export default defineUserConfig({
           '/guide/chat.md',
           '/guide/agents.md',
           '/guide/console.md',
-          '/guide/budget.md',
-          '/guide/browser-copilot.md',
-          '/guide/ide-integrations.md',
-          '/guide/deploy.md'
+          '/guide/browser-copilot.md'
         ]
       },
       {
@@ -55,10 +52,7 @@ export default defineUserConfig({
             '/guide/chat.md',
             '/guide/agents.md',
             '/guide/console.md',
-            '/guide/budget.md',
-            '/guide/browser-copilot.md',
-            '/guide/ide-integrations.md',
-            '/guide/deploy.md'
+            '/guide/browser-copilot.md'
           ]
         }
       ]

@@ -7,7 +7,7 @@ actions:
       link: /guide/introduction.md
 features:
 - title: 🔒 Secure
-  details: Use any AI model provider you want securily (either in your servers or private cloud) and avoid potential leaks.
+  details: Use any AI model provider you want securely (either in your servers or private cloud) and avoid potential leaks.
 - title: 💪 Collaborative
   details: Easily create, share and use agents which accelerate and improve software quality practices. Check <a href="https://github.com/abstracta/tero-agents">the agents repository</a> for some great agents shared by the community. 
 - title: 🧩 Extensible

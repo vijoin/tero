@@ -1,9 +1,9 @@
 ### Documents
 
-#### Setup
-
-::: tip
-Basic vs Advance PDF file processing
+::: info
+This section is comming soon
 :::
 
-#### Actions
+::: tip Basic vs Advance PDF file processing
+
+:::

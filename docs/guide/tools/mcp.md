@@ -1,5 +1,7 @@
 ### MCP
 
-#### Setup
+::: info
+This section is comming soon
+:::
 
-#### Actions
+#### Authentication

@@ -1,7 +1,7 @@
 ### Jira
 
-#### Setup
+::: info
+This section is comming soon
+:::
 
-#### Actions
-
-> Auth
+#### Authentication
