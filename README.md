@@ -9,7 +9,7 @@ Tero is a platform to create, share and use AI agents with focus on empowering s
 
 - **Create and use agents quickly** with your preferred AI models.
 - **Share agents within your teams** to accelerate AI adoption.
-- **Leverage a growing [community catalog]([abstracta/tero-agents](https://github.com/abstracta/tero-agents))** of contributed agents.
+- **Leverage a growing [community catalog](https://github.com/abstracta/tero-agents)** of contributed agents.
 - **Build powerful agents** using built-in tools (e.g., Jira, MCP, Browser, Web, Docs).
 - **Safely experiment** by defining and running test suites for your agents.
 - **Review usage and impact** through reports in the AI Console.
