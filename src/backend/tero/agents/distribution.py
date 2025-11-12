@@ -151,7 +151,7 @@ def _create_icon_with_background(icon_bytes: bytes, bg_color: str) -> bytes:
 
 
 async def update_agent_from_zip(agent: Agent, zip_content: bytes, user: User, db: AsyncSession, background_tasks: BackgroundTasks) -> Agent:
-    with ZipFile(BytesIO(zip_content)) as zip_file:
+    with ZipFile(BytesIO(zip_content), metadata_encoding='utf-8') as zip_file:
         found_root_folder = [ name.rsplit('/', 1)[0] for name in zip_file.namelist() if name.endswith('/agent.md') ]
         # supporting zip without root folder in case users zip the folder contents and not the folder itself
         root_folder = f"{found_root_folder[0]}/" if found_root_folder else ""
@@ -293,7 +293,10 @@ def _parse_tool_config(config: Dict[str, Any], tool: AgentTool, tool_id: str) ->
     ret = {}
     for key, value in config.items():
         parsed_key = _parse_config_key(key)
-        ret[parsed_key] = _parse_config_value(value, tool_schema["properties"][parsed_key], parsed_key, tool_id)
+        if parsed_key in tool_schema["properties"]:
+            ret[parsed_key] = _parse_config_value(value, tool_schema["properties"][parsed_key], parsed_key, tool_id)
+        else:
+            logger.warning(f"Tool '{tool_id}' config key '{parsed_key}' not found in tool schema, ignoring it.")
     return ret
 
 
